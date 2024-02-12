@@ -1,6 +1,6 @@
 name: "ENVIRO+HA"
 description: "Home Assistant add on for the enviro+ board attached on the pi running HA"
-version: "1.1.2"
+version: "1.2.1"
 slug: "enviroha"
 init: false
 arch:

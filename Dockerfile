@@ -8,6 +8,7 @@ ENV PATH=$VIRTUAL_ENV/bin:$PATH
 COPY requirements.txt .
 RUN python -m pip install -r requirements.txt
 RUN python -m pip install enviroplus
+RUN python -m pip install psutil
 COPY enviro2mqtt.py .
 CMD ["python", "enviro2mqtt.py"]
 

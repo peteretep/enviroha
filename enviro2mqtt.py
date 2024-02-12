@@ -1,62 +1,86 @@
 import paho.mqtt.client as mqtt
-from paho.mqtt import enums
-from paho.mqtt import reasoncodes
 import time
 import json
-from subprocess import PIPE, Popen, check_output
 from bme280 import BME280
 import logging
-try:
-    from smbus2 import SMBus
-except ImportError:
-    from smbus import SMBus
+import psutil
+from smbus2 import SMBus
 
-# Set an initial update time
-update_time = time.time()
-# The callback for when the client receives a CONNACK response from the server.
+# Set update interval in seconds
+UPDATE_INTERVAL = 5
+TEMP_COMPENSATE_FACTOR = 2.25
+
+
+def compensate_temperature(raw_temp):
+
+    cpu_temp = psutil.sensors_temperatures()["cpu_thermal"][
+        0
+    ].current  # Access CPU core temperature
+    logging.info(f"CPU temperature: {cpu_temp:.2f} °C")
+
+    comp_temp = raw_temp - ((cpu_temp - raw_temp) / TEMP_COMPENSATE_FACTOR)
+    return comp_temp
+
+
+# Function to read sensor values with error handling and compensation
+def read_bme280_compensated(bme280):
+    try:
+        raw_temp = bme280.get_temperature()
+        # Implement your temperature compensation logic here (e.g., using sensor functions)
+        comp_temp = compensate_temperature(raw_temp)
+        values = {
+            "temperature": int(comp_temp),
+            "pressure": int(bme280.get_pressure()),
+            "humidity": int(bme280.get_humidity()),
+        }
+        return values
+    except (IOError, OSError) as e:
+        logging.exception(f"Error reading sensor: {e}")
+        return None
+
+
+# Callback for successful connection
 def on_connect(client, userdata, flags, rc):
-    logging.info("Connected with result code "+str(rc))
+    logging.info("Connected with result code " + str(rc))
 
 
-# The callback for when a PUBLISH message is received from the server.
+# Callback for received messages (not used in this example)
 def on_message(client, userdata, msg):
-    logging.info(msg.topic+" "+str(msg.payload))
+    logging.info(msg.topic + " " + str(msg.payload))
 
+
+# Callback for successful message publishing
 def on_publish(client, userdata, mid):
-    logging.info("mid: " + str(mid))
+    logging.info("Published message ID: " + str(mid))
 
-client = mqtt.Client(callback_api_version=enums.CallbackAPIVersion.VERSION1)
+
+# Create MQTT client and set callbacks
+client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION1)
 client.on_connect = on_connect
 client.on_message = on_message
+client.on_publish = on_publish
 client.username_pw_set("mosquitto", "mosquitto")
+
+# Connect to MQTT broker
 client.connect("homeassistant", 1883, 60)
 
+# Initialize BME280 instance outside the loop
+bus = SMBus(1)
+bme280 = BME280(i2c_dev=bus)
 
-
-def read_bme280(bme280):
-    values = {}
-    raw_temp = bme280.get_temperature()  # float
-    #TODO: temperature should be compensated due to proximity to cpu
-    comp_temp = raw_temp 
-    values["temperature"] = int(comp_temp)
-    values["temperature_has_been_compensated"] = False
-    values["pressure"] =  int(bme280.get_pressure())
-    values["humidity"] = int(bme280.get_humidity())
-    return values
-
+# Start MQTT client loop
 client.loop_start()
-while True:
-    try:
-        bus = SMBus(1)
-        # Create BME280 instance
-        bme280 = BME280(i2c_dev=bus)
-        values = read_bme280(bme280)
-        
-        time_since_update = time.time() - update_time
-        if time_since_update >= 5:
-            update_time = time.time()
-            logging.info(values)
-            client.publish("homeassistant/enviro", json.dumps(values), retain=True)
-    except Exception as e:
-        logging.exception(e)
 
+while True:
+    # Read sensor values with error handling and retry logic
+    values = read_bme280_compensated(bme280)
+    if values:
+        client.publish("homeassistant/enviro", json.dumps(values), retain=True)
+        logging.info(f"Sensor values published: {values}")
+    else:
+        # Log error and consider retrying after a delay
+        logging.warning("Failed to read sensor values. Retrying in 30 seconds...")
+        time.sleep(30)
+
+# Close bus connection before exiting (optional)
+bus.close()
